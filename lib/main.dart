@@ -7,6 +7,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:video_player/video_player.dart';
 import 'package:http/http.dart' as http;
 
+var videos = [
+  "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+  'https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4'
+      'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+];
 void main() {
   runApp(const MyApp());
 }
@@ -39,9 +44,45 @@ class _MyHomePageState extends State<MyHomePage> {
   int _counter = 0;
   late VideoPlayerController _controller;
   var playbackSpeed = 1.0;
-  var _duration = Duration(seconds: 0);
+  var _disposed = false;
+  var index = 0;
+  var _progress = 0.0;
+  var _isPlayingIndex = 0;
+  bool _isPlaying = false;
+  var _duration;
+  var _onUpdateControllerTime;
+  Duration _position = Duration(seconds: 0);
+  _onControllerUpdate() async {
+    if (_disposed) {
+      return;
+    }
+    _onUpdateControllerTime = 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final controller = _controller;
+    if (controller == null) {
+      debugPrint("controller is null");
+      return;
+    }
+    if (!controller.value.isInitialized) {
+      debugPrint("controller can not be initialized");
+      return;
+    }
+    final position = await controller.position;
+    _position = position!;
+    print(position);
+
+    final playing = controller.value.isPlaying;
+    if (playing) {
+      if (_disposed) return;
+      setState(() {
+        _progress = position.inMilliseconds.ceilToDouble();
+      });
+    }
+    _isPlaying = playing;
+  }
+
   var videoUrl =
-      "https://videos-fms.jwpsrv.com/0_62399925_0xb24496f12221790cf2c743704601560a930e9604/content/conversions/s5njzvyx/videos/gf5Gwppt-33263179.mp4";
+      "https://flutter.github.io/assets-for-api-docs/assets/videos/bee.mp4";
   void _incrementCounter() {
     setState(() {
       // This call to setState tells the Flutter framework that something has
@@ -53,14 +94,34 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  String convertTwo(int value) {
+    return value < 10 ? "0$value" : "$value";
+  }
+
   @override
   void initState() {
-    // TODO: implement initState
     super.initState();
-    _controller = VideoPlayerController.network(videoUrl)
-      ..initialize().then((_) async {
-        _duration = (await _controller.position)!;
-        // Ensure the first frame is shown after the video is initialized, even before the play button has been pressed.
+    _initializeVideo(videos[0]);
+  }
+
+  _initializeVideo(videoUrl) {
+    final controller = VideoPlayerController.network(videoUrl);
+    _controller = controller;
+    final old = _controller;
+
+    if (old != null) {
+      old.removeListener(_onControllerUpdate);
+      old.pause();
+    }
+    setState(() {});
+    // ignore: avoid_single_cascade_in_expression_statements
+    controller
+      ..initialize().then((_) {
+        // old.dispose();
+
+        controller.addListener(_onControllerUpdate);
+        controller.play();
+
         setState(() {});
       });
   }
@@ -102,13 +163,16 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   @override
+  void dispose() {
+    _disposed = true;
+    // _controller?.pause();
+    // _controller?.dispose();
+    // _controller == null;
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
         // Here we take the value from the MyHomePage object that was created by
@@ -118,15 +182,32 @@ class _MyHomePageState extends State<MyHomePage> {
       body: Column(
         children: [
           Center(
-              // Center is a layout widget. It takes a single child and positions it
-              // in the middle of the parent.
               child: _controller.value.isInitialized
                   ? AspectRatio(
                       aspectRatio: _controller.value.aspectRatio,
                       child: VideoPlayer(_controller),
                     )
                   : Container()),
-          _controlView(context)
+          SizedBox(
+            width: MediaQuery.of(context).size.width,
+            child: LinearProgressIndicator(
+              color: Colors.red,
+              value: _progress,
+              backgroundColor: Colors.white,
+            ),
+          ),
+          _controlView(context),
+          ...List.generate(
+              videos.length,
+              (index) => ListTile(
+                    title: Text(
+                      videos[index],
+                    ),
+                    onTap: () {
+                      _initializeVideo(videos[index]);
+                    },
+                  )),
+
           // Row(
           //   mainAxisAlignment: MainAxisAlignment.center,
           //   children: [
@@ -164,19 +245,20 @@ class _MyHomePageState extends State<MyHomePage> {
           //         Icons.fast_forward,
           //       ),
           //     ),
-          //     FloatingActionButton(
-          //       onPressed: () {
-          //         download(videoUrl, "video1");
-          //         // setState(() {
-          //         //   _controller.value.isPlaying
-          //         //       ? _controller.pause()
-          //         //       : _controller.play();
-          //         // });
-          //       },
-          //       child: Icon(
-          //         Icons.download,
-          //       ),
-          //     ),
+          FloatingActionButton(
+            onPressed: () {
+              _initializeVideo(videoUrl);
+              // download(videoUrl, "video1");
+              // setState(() {
+              //   _controller.value.isPlaying
+              //       ? _controller.pause()
+              //       : _controller.play();
+              // });
+            },
+            child: Icon(
+              Icons.download,
+            ),
+          ),
           //   ],
           // )
         ],
@@ -196,15 +278,40 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-    _controller.dispose();
+  _controlView(BuildContext context) {
+    final noMute = (_controller.value.volume) > 0;
+    final duration = _duration?.inSeconds ?? 0;
+
+    final head = _position.inSeconds;
+    final reamined = max(0, duration - head) ?? 0;
+
+    final mins = convertTwo(reamined ~/ 60);
+    final secs = convertTwo(reamined % 60);
+    return Row(
+      children: [
+        IconButton(icon: Icon(Icons.volume_down), onPressed: () {}),
+        IconButton(
+            icon: Icon(
+              Icons.fast_rewind,
+            ),
+            onPressed: () {}),
+        IconButton(
+            icon: Icon(
+              _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+            ),
+            onPressed: () {
+              _controller.value.isPlaying
+                  ? _controller.pause()
+                  : _controller.play();
+              setState(() {});
+            }),
+        IconButton(icon: Icon(Icons.fast_forward), onPressed: () {}),
+        Text(_position.toString() + ":" + secs.toString())
+      ],
+    );
   }
 
-  _controlView(BuildContext context) {
-    final noMute = (_controller.value.volume ?? 0) > 0;
-    final duration = _duration?.inSeconds ?? 0;
-    return Container();
+  max(int i, int param1) {
+    return i > param1 ? i : param1;
   }
 }
